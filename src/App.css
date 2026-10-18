@@ -1,0 +1,340 @@
+/* ───────── the 3D layer ───────── */
+
+.dna-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+  cursor: grab;
+  /* vertical swipes still scroll the page; horizontal ones turn the helix */
+  touch-action: pan-y;
+  opacity: 0;
+  transition: opacity 1.4s ease 0.2s;
+}
+
+.dna-canvas.is-ready {
+  opacity: 1;
+}
+
+.dna-canvas.is-dragging {
+  cursor: grabbing;
+}
+
+.dna-canvas:focus-visible {
+  outline-offset: -6px;
+}
+
+/* darkens the corners so the glow reads as light in a dark room */
+.veil {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(ellipse 85% 75% at 50% 50%, transparent 40%, rgba(4, 7, 22, 0.8) 100%);
+}
+
+/* ───────── story text ───────── */
+
+.story {
+  position: relative;
+  z-index: 2;
+  /* Let drags fall through to the canvas; text itself is not interactive. */
+  pointer-events: none;
+}
+
+.stop {
+  min-height: 135vh;
+  min-height: 135svh;
+  display: flex;
+  align-items: center;
+  padding: 0 clamp(24px, 6vw, 96px);
+}
+
+/* Heroes and finales are one screen tall so the first and last poses land on the page ends. */
+.stop:first-child,
+.stop:last-child {
+  min-height: 100vh;
+  min-height: 100svh;
+}
+
+.stop--left {
+  justify-content: flex-start;
+}
+
+.stop--right {
+  justify-content: flex-end;
+}
+
+.stop--center {
+  justify-content: center;
+  text-align: center;
+}
+
+.stop__text {
+  width: min(100%, 31rem);
+}
+
+.stop h1,
+.stop h2 {
+  font-weight: 300;
+  font-size: clamp(2.35rem, 4.6vw, 4.25rem);
+  line-height: 1.04;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+  text-shadow: 0 0 40px rgba(4, 7, 22, 0.9);
+}
+
+.stop p {
+  margin-top: 1.4rem;
+  max-width: 34ch;
+  font-size: clamp(1.05rem, 1.35vw, 1.25rem);
+  line-height: 1.55;
+  color: var(--muted);
+  text-wrap: pretty;
+  text-shadow: 0 0 24px rgba(4, 7, 22, 0.95);
+}
+
+.stop--center p {
+  margin-inline: auto;
+}
+
+/* The finale sits on top of the brightest part of the scene, so it gets its own pool of shade. */
+.stop--center .stop__text {
+  position: relative;
+  isolation: isolate;
+}
+
+.stop--center .stop__text::before {
+  content: '';
+  position: absolute;
+  inset: -5rem -7rem;
+  z-index: -1;
+  background: radial-gradient(closest-side, rgba(4, 7, 22, 0.66), rgba(4, 7, 22, 0.38) 60%, transparent);
+}
+
+.stop p.stop__hint {
+  margin-top: 2.2rem;
+  font-style: italic;
+  font-size: 1rem;
+  color: var(--ink);
+  opacity: 0.8;
+}
+
+.stop__action {
+  pointer-events: auto;
+  margin-top: 2.4rem;
+  padding: 0.85rem 1.7rem;
+  font: inherit;
+  font-size: 1.05rem;
+  color: var(--ink);
+  background: rgba(var(--accent-rgb, 60, 116, 255), 0.14);
+  border: 1px solid rgba(var(--accent-rgb, 60, 116, 255), 0.7);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.25s ease, border-color 0.25s ease;
+}
+
+.stop__action:hover {
+  background: rgba(var(--accent-rgb, 60, 116, 255), 0.34);
+  border-color: rgb(var(--accent-rgb, 60, 116, 255));
+}
+
+/* ───────── ant scenes: same type, warmer light ───────── */
+
+.stop--warm {
+  --ink: #f7ead7;
+  --muted: #d3bd9c;
+  --accent-rgb: 255, 179, 92;
+  color: var(--ink);
+}
+
+/* ───────── the blackout: pinned frame, words light up as you scroll ───────── */
+
+.dark {
+  position: relative;
+  height: 400vh;
+  height: 400svh;
+}
+
+.dark__frame {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 0 clamp(24px, 8vw, 140px);
+}
+
+.dark__beat {
+  grid-area: 1 / 1;
+  max-width: 30ch;
+  margin: 0;
+  font-weight: 300;
+  font-size: clamp(1.7rem, 3.5vw, 3.1rem);
+  line-height: 1.22;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  opacity: 0;
+}
+
+.dark__beat span {
+  --w: 0;
+  opacity: calc(0.13 + 0.87 * var(--w));
+  text-shadow: 0 0 calc(var(--w) * 26px) rgba(96, 150, 255, calc(var(--w) * 0.5));
+}
+
+/* ───────── scale bar: a real measurement, calibrated to the helix's 2 nm width ───────── */
+
+.scale {
+  position: fixed;
+  z-index: 3;
+  left: clamp(24px, 6vw, 96px);
+  bottom: 28px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  pointer-events: none;
+  opacity: 0; /* driven from the scene: fades in after the intro and out with the helix */
+}
+
+.scale__bar {
+  display: block;
+  width: 100px;
+  height: 9px;
+  border: 1px solid var(--ink);
+  border-top: 0;
+  opacity: 0.85;
+}
+
+.scale__label {
+  min-width: 4.5ch;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+/* ───────── loading ───────── */
+
+.loader {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 18px;
+  background: var(--bg);
+  transition: opacity 0.9s ease, visibility 0s linear 0.9s;
+}
+
+.loader.is-done {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.loader p {
+  font-size: 1.1rem;
+  color: var(--muted);
+  max-width: 32ch;
+  text-align: center;
+}
+
+.loader__track {
+  display: block;
+  width: 180px;
+  height: 1px;
+  background: rgba(147, 165, 207, 0.25);
+  overflow: hidden;
+}
+
+.loader__fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--stain);
+  transform-origin: left;
+  transition: transform 0.2s ease-out;
+}
+
+/* ───────── phones: helix sits above, text anchors to the bottom ───────── */
+
+@media (max-width: 760px) {
+  /* Bottom-anchored text only sits right when each stop is exactly one screen tall. */
+  .stop,
+  .stop:first-child,
+  .stop:last-child {
+    min-height: 100vh;
+    min-height: 100svh;
+  }
+
+  .stop,
+  .stop--left,
+  .stop--right,
+  .stop--center {
+    align-items: flex-end;
+    justify-content: flex-start;
+    text-align: left;
+    padding-bottom: 16vh;
+    padding-bottom: 16svh;
+  }
+
+  .stop--center p {
+    margin-inline: 0;
+  }
+
+  .stop h1,
+  .stop h2 {
+    font-size: clamp(2rem, 9vw, 2.6rem);
+  }
+
+  .stop p {
+    margin-top: 1rem;
+    font-size: 1.02rem;
+  }
+
+  .scale {
+    bottom: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dna-canvas,
+  .scale,
+  .loader {
+    transition-duration: 0.01s;
+    transition-delay: 0s;
+  }
+}
+
+/* ───────── hero chips, nav bar, reader ───────── */
+.stop__chips { display: flex; flex-wrap: wrap; gap: 0.7rem; margin-top: 2rem; pointer-events: auto; }
+.stop__chip { font: inherit; font-size: clamp(1.15rem, 1.8vw, 1.6rem); padding: 0.7rem 1.5rem; color: var(--ink); background: rgba(60,116,255,.16); border: 1px solid rgba(95,150,255,.75); border-radius: 999px; cursor: pointer; transition: background-color .2s; }
+.stop__chip:hover { background: rgba(60,116,255,.4); }
+.topbar { position: fixed; z-index: 5; inset: 0 0 auto 0; display: flex; align-items: center; gap: 2rem; padding: 14px clamp(20px,4vw,56px); background: linear-gradient(rgba(4,7,22,.85), transparent); }
+.topbar button { font: inherit; color: var(--muted); background: none; border: 0; cursor: pointer; padding: .3rem .1rem; border-bottom: 1px solid transparent; }
+.topbar .brand { color: var(--ink); font-size: 1.2rem; }
+.topbar nav { display: flex; gap: 1.6rem; margin-left: auto; }
+.topbar nav .is-on { color: var(--ink); border-bottom-color: var(--stain); }
+.progress { position: fixed; z-index: 6; inset: 0 0 auto 0; height: 2px; }
+.progress span { display: block; height: 100%; background: var(--stain); transform-origin: left; }
+.rail { position: fixed; z-index: 5; right: 18px; top: 50%; transform: translateY(-50%); display: grid; gap: 14px; }
+.rail button { width: 10px; height: 10px; padding: 0; border-radius: 50%; border: 1px solid var(--muted); background: none; cursor: pointer; }
+.rail .is-on { background: var(--stain); border-color: var(--stain); }
+.reader { position: fixed; inset: 0; z-index: 9; display: grid; place-items: center; padding: 20px; background: rgba(4,7,22,.78); overflow-y: auto; }
+.reader__card { width: min(100%, 44rem); max-height: 88svh; overflow-y: auto; padding: 2rem 2.2rem; background: #0a1230; border: 1px solid rgba(95,150,255,.4); border-radius: 14px; line-height: 1.55; }
+.reader__card h2 { font-weight: 400; font-size: 2rem; margin-bottom: .8rem; }
+.reader__card h3 { font-size: 1.15rem; margin: 1.3rem 0 .3rem; color: var(--ink); }
+.reader__card p, .reader__card dd { color: var(--muted); }
+.reader__tag { font-size: .95rem; color: var(--stain) !important; margin-bottom: .4rem; }
+.reader__stats { display: grid; gap: .6rem; margin: 1.2rem 0 0; }
+.reader__stats dt { font-size: 1.6rem; color: var(--ink); }
+.reader__stats dd { margin: 0; }
+@media (max-width: 760px) { .topbar nav { display: none; } .rail { right: 8px; } }
+
+/* the Earth is bright: give its text a pool of shade */
+.stop--earth .stop__text { position: relative; isolation: isolate; }
+.stop--earth .stop__text::before { content: ''; position: absolute; inset: -3rem -4rem; z-index: -1; background: radial-gradient(closest-side, rgba(4,7,22,.7), rgba(4,7,22,.35) 65%, transparent); }

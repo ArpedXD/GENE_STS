@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Gene &amp; Stem — Interactive Molecular &amp; Ethical Explorer</title>
+  <meta name="description"
+    content="An interactive 3D research explorer for the Science, Technology and Society paper on gene therapy and stem cell research: fly the genome, inspect the structures, and read the ethical and social record.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="icon" type="image/svg+xml"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a1230'/%3E%3Cpath d='M10 5c0 8 12 8 12 16s-12 8-12 6M22 5c0 8-12 8-12 16' fill='none' stroke='%235fd0f5' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 11h8M12 21h8' stroke='%23a78bfa' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+  <meta name="theme-color" content="#0a1230">
+  <link rel="stylesheet" href="./style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+
+<body>
+  <div class="space" aria-hidden="true"></div>
+  <img class="bg-cell" src="heaven.png" alt="" aria-hidden="true" decoding="async" fetchpriority="high">
+  <div class="sky" aria-hidden="true"></div>
+  <img class="sky-plate" src="./heaven.png" alt="" aria-hidden="true" decoding="async">
+  <div class="dive" aria-hidden="true"></div>
+  <div class="wash" aria-hidden="true"></div>
+  <canvas id="scene"
+    aria-label="Interactive 3D world containing a DNA double helix, stem cells, gene editing complexes, delivery vectors and viral structures"></canvas>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="#top" id="brand">Gene &amp; Stem</a>
+    <nav class="chapters" id="nav" aria-label="Chapters"></nav>
+    <button class="motion-toggle" id="motion" type="button" aria-pressed="false">
+      <span class="motion-dot" aria-hidden="true"></span>
+      <span class="motion-text">Ambient motion</span>
+    </button>
+  </header>
+
+  <div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
+
+  <div class="rail" id="rail" role="navigation" aria-label="Chapter markers"></div>
+
+  <aside class="panel" id="panel" aria-live="polite">
+    <p class="eyebrow" id="p-eyebrow"></p>
+    <h1 class="panel-title" id="p-title"></h1>
+    <p class="panel-lede" id="p-lede"></p>
+    <div class="panel-actions">
+      <button class="btn btn-primary" id="p-primary" type="button"></button>
+      <button class="btn btn-secondary" id="p-secondary" type="button"></button>
+    </div>
+  </aside>
+
+  <div class="scroll-cue" id="scroll-cue" aria-hidden="true">
+    <span class="mouse"><span class="wheel"></span></span>
+    <span class="cue-text">
+      <strong>Scroll to descend</strong>
+      <small>Drag to rotate · click a glowing structure</small>
+    </span>
+  </div>
+
+  <main id="stages"></main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <div class="hover-label" id="hover-label" aria-hidden="true">
+    <span id="hover-tag">Structure</span>
+    <strong id="hover-name">Molecule</strong>
+  </div>
+
+  <div class="reader" id="reader" role="dialog" aria-modal="true" aria-labelledby="reader-title">
+    <article class="reader-card">
+      <header class="reader-head">
+        <span class="tag-pill" id="reader-tag">Inspection target</span>
+        <h2 id="reader-title"></h2>
+      </header>
+      <div class="reader-body" id="reader-body"></div>
+      <footer class="reader-foot">
+        <div class="reader-next" id="reader-next"></div>
+        <button class="btn btn-primary" id="reader-close" type="button">Close</button>
+      </footer>
+    </article>
+  </div>
+
+  <noscript>
+    <p class="noscript-note">
+      The 3D explorer needs JavaScript. The chapter panels and the reader remain readable without it.
+    </p>
+  </noscript>
+
+  <script type="module" src="./script.js"></script>
+</body>
+
+</html>
