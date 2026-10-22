@@ -1,0 +1,134 @@
+/*
+ * Story panel and scroll track.
+ * Fonts (Fraunces, Instrument Sans) are already loaded in index.html.
+ * Motion tokens are CSS variables, so the pace of the cross-fade is tuned here and nowhere else.
+ * Keep --story-out-ms in step with `outMs` in usePanelTransition.js.
+ */
+:root {
+  --story-ink: #eef2ff;
+  --story-ink-dim: rgba(224, 231, 255, 0.74);
+  --story-accent: #5fd0f5;
+  --story-accent-2: #a78bfa;
+  --story-scrim: rgba(4, 7, 22, 0.86);
+
+  --story-out-ms: 240ms;
+  --story-in-ms: 620ms;
+  --story-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --story-drift: 16px;
+}
+
+/* One stop per beat. The camera arrives at the centre of each. */
+.stage { height: 130vh; height: 130svh; }
+
+/* ───────── panel shell: full-screen, click-through, docks to a side ───────── */
+.story-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  padding: clamp(5rem, 10vh, 7rem) clamp(1.25rem, 5vw, 4.5rem) clamp(2rem, 6vh, 4rem);
+  padding-left: max(clamp(1.25rem, 5vw, 4.5rem), env(safe-area-inset-left));
+  padding-right: max(clamp(1.25rem, 5vw, 4.5rem), env(safe-area-inset-right));
+  pointer-events: none;
+}
+.story-panel[data-side='L'] { justify-content: flex-start; }
+.story-panel[data-side='R'] { justify-content: flex-end; }
+.story-panel[data-empty='true'] .story-card { visibility: hidden; }
+
+/* ───────── the card: the only thing that fades and drifts ───────── */
+.story-card {
+  width: min(32rem, 100%);
+  pointer-events: auto;
+  color: var(--story-ink);
+  will-change: opacity, transform;
+  /* --dir is 1 going forward, -1 going back; copy leaves the way you are heading and arrives from the other side */
+  --dy: calc(var(--story-drift) * var(--dir, 1));
+}
+.story-panel[data-phase='out'] .story-card {
+  opacity: 0;
+  transform: translate3d(0, calc(var(--dy) * -1), 0);
+  transition: opacity var(--story-out-ms) ease-in, transform var(--story-out-ms) ease-in;
+  pointer-events: none;
+}
+.story-panel[data-phase='pre'] .story-card {
+  opacity: 0;
+  transform: translate3d(0, var(--dy), 0);
+  transition: none;
+}
+.story-panel[data-phase='in'] .story-card {
+  opacity: 1;
+  transform: none;
+  transition: opacity var(--story-in-ms) var(--story-ease), transform var(--story-in-ms) var(--story-ease);
+}
+
+/* ───────── type ───────── */
+.story-eyebrow {
+  margin: 0 0 0.35rem;
+  font: 500 0.8rem/1.4 'IBM Plex Mono', ui-monospace, monospace;
+  letter-spacing: 0.04em;
+  color: var(--story-accent);
+}
+.story-kicker {
+  margin: 0 0 1.1rem;
+  font: 400 0.9rem/1.4 'Instrument Sans', system-ui, sans-serif;
+  color: var(--story-ink-dim);
+}
+.story-title {
+  margin: 0 0 1.25rem;
+  font-family: 'Fraunces', Georgia, serif;
+  font-weight: 650;
+  font-size: clamp(2.4rem, 5.4vw, 4.9rem);
+  line-height: 1.02;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+  text-shadow: 0 2px 28px rgba(4, 7, 22, 0.55);
+}
+.story-lede {
+  margin: 0 0 1.75rem;
+  max-width: 30rem;
+  font: 400 clamp(1rem, 1.2vw, 1.12rem) / 1.65 'Instrument Sans', system-ui, sans-serif;
+  color: var(--story-ink-dim);
+  text-shadow: 0 1px 18px rgba(4, 7, 22, 0.7);
+}
+
+/* ───────── actions: one button stands alone, two sit side by side and wrap on narrow screens ───────── */
+.story-actions { display: flex; flex-wrap: wrap; gap: 0.7rem; }
+.story-btn {
+  min-height: 2.75rem;
+  padding: 0.7rem 1.35rem;
+  border-radius: 999px;
+  font: 600 0.95rem/1 'Instrument Sans', system-ui, sans-serif;
+  cursor: pointer;
+  transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease;
+}
+.story-btn:hover { transform: translateY(-1px); }
+.story-btn:focus-visible { outline: 2px solid var(--story-accent); outline-offset: 3px; }
+.story-btn--primary {
+  border: 0;
+  color: #06101f;
+  background: linear-gradient(120deg, var(--story-accent), #8fe3ff);
+}
+.story-btn--secondary {
+  color: var(--story-ink);
+  background: rgba(10, 18, 48, 0.45);
+  border: 1px solid rgba(167, 139, 250, 0.55);
+  backdrop-filter: blur(6px);
+}
+.story-btn--secondary:hover { border-color: var(--story-accent-2); background: rgba(40, 30, 90, 0.55); }
+
+/* ───────── portrait: the subject moves up, the panel docks to the bottom on a scrim ───────── */
+@media (max-aspect-ratio: 1/1) {
+  .story-panel { align-items: flex-end; justify-content: center !important; padding-bottom: max(1.25rem, env(safe-area-inset-bottom)); }
+  .story-card {
+    width: 100%;
+    padding: 2.5rem 0.25rem 0.5rem;
+    background: linear-gradient(to top, var(--story-scrim) 55%, transparent);
+  }
+  .story-title { font-size: clamp(2rem, 9vw, 3rem); margin-bottom: 0.8rem; }
+  .story-lede { font-size: 0.98rem; margin-bottom: 1.2rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .story-card, .story-btn { transition-duration: 0.01ms !important; }
+}

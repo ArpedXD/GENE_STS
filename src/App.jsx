@@ -1,61 +1,46 @@
-import { useRef, useState, useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import './App.css'
+import './story/story.css'
+
 import DnaScene from './components/DnaScene.jsx'
 import DarkSequence from './components/DarkSequence.jsx'
 import Nav from './components/Nav.jsx'
 import Reader from './components/Reader.jsx'
-import { INSPECT } from './explorer/content.js'
+
 import { STOPS } from './content.js'
+import { BEATS } from './story/timeline.js'
+import { useScrollTimeline } from './story/useScrollTimeline.js'
+import StoryPanel from './story/StoryPanel.jsx'
+
+// The blackout lines still come from your old STOPS array.
+const DARK_BEATS = STOPS.find((s) => s.kind === 'dark')?.beats ?? []
 
 function App() {
-  const stopsRef = useRef([])
-  const [open, setOpen] = useState(null)
-  const getEls = useCallback(() => stopsRef.current, [])
+  // refs: one stop element per beat, in timeline order. active: the beat the viewer is on.
+  const { active, refs, getEls, goTo } = useScrollTimeline(BEATS.length)
+  const [open, setOpen] = useState(null) // INSPECT key shown in the Reader
+
+  // Primary button: home moves on; other chapters move on until you add a chapter reader.
+  const handlePrimary = useCallback((beat, index) => goTo(index + 1), [goTo])
 
   return (
     <>
-      <DnaScene getStops={() => stopsRef.current.filter(Boolean)} onInspect={setOpen} />
-      <Nav stops={STOPS} getEls={getEls} />
-      <Reader id={open} onClose={() => setOpen(null)} />
-      <main className="story">
-        {STOPS.map((stop, i) => {
-          const setRef = (el) => (stopsRef.current[i] = el)
-          if (stop.kind === 'dark') {
-            return <DarkSequence key={stop.id} id={stop.id} beats={stop.beats} ref={setRef} />
-          }
-          const Heading = i === 0 ? 'h1' : 'h2'
-          return (
-            <section
-              key={stop.id}
-              ref={setRef}
-              className={`stop stop--${stop.side}${stop.theme ? ` stop--${stop.theme}` : ''}`}
-              aria-labelledby={`${stop.id}-title`}
-            >
-              <div className="stop__text">
-                <Heading id={`${stop.id}-title`}>{stop.title}</Heading>
-                <p>{stop.body}</p>
-                {stop.hint && <p className="stop__hint">{stop.hint}</p>}
-                {stop.buttons && (
-                  <div className="stop__chips">
-                    {stop.buttons.map((k) => (
-                      <button key={k} type="button" className="stop__chip" onClick={() => setOpen(k)}>{INSPECT[k]?.short}</button>
-                    ))}
-                  </div>
-                )}
-                {stop.action && (
-                  <button
-                    type="button"
-                    className="stop__action"
-                    onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-                  >
-                    {stop.action}
-                  </button>
-                )}
-              </div>
-            </section>
-          )
-        })}
+      <DnaScene getStops={() => getEls().filter(Boolean)} onInspect={setOpen} />
+      <Nav stops={BEATS} getEls={getEls} />
+
+      <StoryPanel beats={BEATS} activeIndex={active} onPrimary={handlePrimary} onSecondary={setOpen} />
+
+      <main className="stages">
+        {BEATS.map((beat, i) =>
+          beat.kind === 'dark' ? (
+            <DarkSequence key={beat.id} id={beat.id} ref={refs[i]} beats={DARK_BEATS} />
+          ) : (
+            <section key={beat.id} id={beat.id} ref={refs[i]} className="stage" aria-label={beat.entry?.title ?? beat.id} />
+          ),
+        )}
       </main>
+
+      <Reader id={open} onClose={() => setOpen(null)} />
     </>
   )
 }

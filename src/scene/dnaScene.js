@@ -1,6 +1,5 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
@@ -17,6 +16,12 @@ const HELIX_NM_DIAMETER = 2 // real DNA is ~2 nm wide; the scale bar is calibrat
 const ANT_LENGTH = 5.2 // world units, head to antenna tip
 const ANT_SOURCE = { length: 1835, centre: [-33, 0, 277] } // measured from ant.glb, in its own units
 const LEAF_SCALE = 25 // the leaves file is ~0.4 units across; scaled up to ant-sized drama
+
+// DNA-world lighting: the same warm-key / cool-rim contrast that makes the ant scene read well.
+const DNA_KEY_INTENSITY = 2.2
+const DNA_RIM_INTENSITY = 3.0
+const DNA_DUST_OPACITY = 0.15
+const BLOOM_THRESHOLD_DNA = 0.42 // was 0.2: at 0.2 nearly everything glowed and the helix went soft
 
 const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v))
 const lerp = (a, b, t) => a + (b - a) * t
@@ -133,12 +138,14 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
   const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 })
   const composer = new EffectComposer(renderer, target)
   composer.addPass(new RenderPass(scene, camera))
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.5, 0.2)
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.5, BLOOM_THRESHOLD_DNA)
   composer.addPass(bloom)
   composer.addPass(new OutputPass())
 
   // ───────────────────────────── state
   let dnaInfo = null
+  let dnaLights = [] // [warm key, cool rim]: fade out with the helix
+  let dust = null // drifting motes around the helix
   let earthInfo = null // { sun }
   let earth = null // the earth.glb planet: { group, update(dt, amount) }
   let ant = null // { rig, mixer, materials, spot, hemi, ground, leaves }
@@ -320,11 +327,19 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
     scene.fog.color.copy(scene.background)
     scene.fog.density = lerp(0.034, 0.016, w) * (1 - 0.97 * phase.earth)
     bloom.strength = lerp(0.6, 0.32, w)
-    bloom.threshold = lerp(0.2, 0.62, w)
+    bloom.threshold = lerp(BLOOM_THRESHOLD_DNA, 0.62, w)
 
     if (dnaInfo) {
       const d = phase.dna
       dnaInfo.setFade(d)
+      if (dnaLights.length) {
+        dnaLights[0].intensity = DNA_KEY_INTENSITY * d
+        dnaLights[1].intensity = DNA_RIM_INTENSITY * d
+      }
+      if (dust) {
+        dust.visible = d > 0.003
+        dust.material.opacity = DNA_DUST_OPACITY * d
+      }
     }
 
     if (ant) {
@@ -397,6 +412,7 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
     spinQuat.setFromAxisAngle(AXIS_X, spinBase.angle)
     dnaInfo.rig.quaternion.copy(dragQuat).multiply(spinQuat)
     dnaInfo.tick(performance.now() / 1000)
+    if (dust && !reduceMotion) dust.rotation.y += dt * 0.02
     if (earthInfo) {
       earthInfo.sun.intensity = 1.5 * phase.earth
       earth?.update(dt, phase.earth)
@@ -579,6 +595,21 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
         scene.add(sun, sun.target)
         earthInfo = { sun }
         scene.add(dnaInfo.rig)
+
+        // Warm key from the front, cool rim from behind: contrast is what gives the helix depth.
+        // Both start at 0 and are driven by phase.dna in applyPhase, so they are off in the ant world.
+        const dnaKey = new THREE.DirectionalLight(0xffd2a8, 0)
+        dnaKey.position.set(8, 10, 12)
+        const dnaRim = new THREE.DirectionalLight(0x5fb8ff, 0)
+        dnaRim.position.set(-10, 4, -12)
+        scene.add(dnaKey, dnaRim)
+        dnaLights = [dnaKey, dnaRim]
+
+        // Drifting motes around the helix (built in structures.js, not previously added to the scene).
+        dust = world.dust
+        dust.material.opacity = DNA_DUST_OPACITY
+        scene.add(dust)
+
         measureStops()
         onScroll()
         scrollP = scrollTarget
@@ -642,6 +673,8 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
       scene.traverse((o) => {
         if (o.isMesh) o.geometry?.dispose()
       })
+      dust?.geometry.dispose()
+      dust?.material.dispose()
       dnaInfo?.helixMaterial.dispose()
       ant?.materials.forEach((m) => m.dispose())
       envTexture.dispose()
