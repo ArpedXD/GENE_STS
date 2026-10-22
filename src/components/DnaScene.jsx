@@ -5,6 +5,7 @@ const BASE = import.meta.env.BASE_URL
 const MODEL_URLS = {
   ant: `${BASE}assets/ant.glb`,
   earth: `${BASE}assets/earth.glb`,
+  forest: `${BASE}assets/forest.glb`,
   leaves: `${BASE}assets/leaves.glb`,
 }
 

@@ -6,8 +6,9 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { createWorld } from '../explorer/structures.js'
-import { CAMERA_KEYS, ANT_ORIGIN, EARTH_ORIGIN } from './cameraKeys.js'
+import { CAMERA_KEYS, ANT_ORIGIN, EARTH_ORIGIN, EARTH_RADIUS } from './cameraKeys.js'
 
 const BG_DNA = new THREE.Color(0x040716)
 const BG_ANT = new THREE.Color(0x070504)
@@ -16,6 +17,28 @@ const HELIX_NM_DIAMETER = 2 // real DNA is ~2 nm wide; the scale bar is calibrat
 const ANT_LENGTH = 5.2 // world units, head to antenna tip
 const ANT_SOURCE = { length: 1835, centre: [-33, 0, 277] } // measured from ant.glb, in its own units
 const LEAF_SCALE = 25 // the leaves file is ~0.4 units across; scaled up to ant-sized drama
+
+// Forest (forest.glb, "a forest with a road at night"): the source is a ~10 x 10 unit woodland block with a road down the
+// middle, trees 1-2.5 units tall. At scale 30 the block is ~290 units wide and the trees 40-75 units tall, against a 5-unit ant.
+const FOREST_SCALE = 30
+const FOREST_SOURCE = {
+  centre: [-0.04, 0.1, 0.45], // middle of the road, in the file's own units: this point is stood on the ant's origin
+  minX: -5.4, // a few stray props sit in a line far off the left edge of the terrain; anything left of this is dropped
+}
+const FOREST_SINK = 1.5 // world units the road sits below the ant's soil, so the soil disc never z-fights with it
+const FOREST_GLOW = 0.28 // emissive share of the texture, so the night foliage never goes pure black
+const FOREST_MOON_INTENSITY = 2.4
+const FOREST_HEMI_INTENSITY = 0.9
+
+// Forest edge clouds: the wood is a hard-edged block, so a ring of soft cloud banks and a low mist is wrapped around its
+// perimeter. They hide the cut-off from every camera angle and fade in and out with the forest.
+const CLOUD_COUNT = 110 // cloud puffs around the perimeter (the low mist uses the same number again)
+const CLOUD_SIZE = 110 // world units: average puff width
+const CLOUD_DEPTH = 60 // world units: how far the bank is spread across the edge (some inside, most outside)
+const CLOUD_OPACITY = 0.55
+const MIST_OPACITY = 0.5
+const CLOUD_COLOR = 0x7388ad // cool moonlit grey-blue, to match the night wood
+const MIST_COLOR = 0x5a6c8f
 
 // DNA-world lighting: the same warm-key / cool-rim contrast that makes the ant scene read well.
 const DNA_KEY_INTENSITY = 2.2
@@ -27,6 +50,80 @@ const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v))
 const lerp = (a, b, t) => a + (b - a) * t
 const smoother = (t) => t * t * t * (t * (t * 6 - 15) + 10)
 const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3)
+
+/** Stars on a unit sphere. The frame loop centres them on the camera and scales them to just inside the far plane, so they never parallax. */
+function buildStars(count = 2600) {
+  const pos = new Float32Array(count * 3)
+  const col = new Float32Array(count * 3)
+  let s = 20261022
+  const rand = () => {
+    s = (s + 0x6d2b79f5) | 0
+    let t = Math.imul(s ^ (s >>> 15), 1 | s)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  for (let i = 0; i < count; i++) {
+    const u = rand() * 2 - 1
+    const a = rand() * Math.PI * 2
+    const r = Math.sqrt(1 - u * u)
+    pos.set([r * Math.cos(a), u, r * Math.sin(a)], i * 3)
+    const b = 0.3 + 0.7 * Math.pow(rand(), 3) // mostly dim, a few bright
+    const warm = rand()
+    col.set([b * (0.82 + 0.18 * warm), b * 0.92, b * (1 - 0.2 * warm)], i * 3)
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
+  const mat = new THREE.PointsMaterial({ size: 1.6, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0, depthWrite: false, fog: false })
+  const points = new THREE.Points(geo, mat)
+  points.frustumCulled = false
+  points.renderOrder = -1
+  points.visible = false
+  return points
+}
+
+/**
+ * A thin blue rim of air around the planet: a slightly larger back-faced sphere, additive, brightest at the limb and on the sunlit side.
+ * Seen from outside, only the ring between the planet's edge and the shell's edge is visible (the planet hides the rest), and in that ring
+ * the view angle never exceeds about 0.22 whatever the distance, which is what the 0.22 below is tuned to.
+ */
+function buildAtmosphere(sunDir) {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uAmount: { value: 0 }, uSun: { value: sunDir.clone().normalize() }, uColor: { value: new THREE.Color(0.3, 0.58, 1.0) } },
+    vertexShader: `
+      varying vec3 vN;
+      varying vec3 vW;
+      void main() {
+        vN = normalize(mat3(modelMatrix) * normal);
+        vec4 w = modelMatrix * vec4(position, 1.0);
+        vW = w.xyz;
+        gl_Position = projectionMatrix * viewMatrix * w;
+      }`,
+    fragmentShader: `
+      uniform float uAmount;
+      uniform vec3 uSun;
+      uniform vec3 uColor;
+      varying vec3 vN;
+      varying vec3 vW;
+      void main() {
+        vec3 n = normalize(vN);
+        vec3 v = normalize(cameraPosition - vW);
+        float rim = pow(clamp(1.0 - abs(dot(n, v)) / 0.22, 0.0, 1.0), 1.6);
+        float lit = 0.3 + 0.7 * smoothstep(-0.3, 0.6, dot(n, uSun));
+        gl_FragColor = vec4(uColor * rim * lit * 0.85 * uAmount, 1.0);
+      }`,
+    side: THREE.BackSide,
+    blending: THREE.AdditiveBlending,
+    transparent: true,
+    depthWrite: false,
+    fog: false,
+  })
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS * 1.025, 96, 64), mat)
+  mesh.position.set(...EARTH_ORIGIN)
+  mesh.frustumCulled = false
+  mesh.visible = false
+  return mesh
+}
 
 /** The explorer's procedural helix plus its clickable structures, standing in for the old dna.glb. */
 function buildExplorerRig(world) {
@@ -133,7 +230,7 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
   scene.environment = envTexture
   scene.environmentIntensity = 0.35
 
-  const camera = new THREE.PerspectiveCamera(38, 1, 0.03, 300)
+  const camera = new THREE.PerspectiveCamera(38, 1, 0.03, 700)
   // MSAA on the post-processing target, otherwise thin ant legs and leaf edges shimmer.
   const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 })
   const composer = new EffectComposer(renderer, target)
@@ -142,13 +239,20 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
   composer.addPass(bloom)
   composer.addPass(new OutputPass())
 
+  // The night sky: fades in with the planet, once the camera has climbed out of the ant's world.
+  const stars = buildStars()
+  scene.add(stars)
+
   // ───────────────────────────── state
   let dnaInfo = null
   let dnaLights = [] // [warm key, cool rim]: fade out with the helix
   let dust = null // drifting motes around the helix
   let earthInfo = null // { sun }
   let earth = null // the earth.glb planet: { group, update(dt, amount) }
-  let ant = null // { rig, mixer, materials, spot, hemi, ground, leaves }
+  let forest = null // the forest.glb wood: { group, mats, update(amount) }
+  let forestLights = [] // [moon, hemisphere]: fade in and out with the forest
+  let forestClouds = null // the cloud bank around the forest edge: { update(amount, time), dispose() }
+  let ant = null // { group, rig, antMixer, leafMixers, materials, spot, hemi, ground, leafGroups, soilMats }
   let aspect = 1
   let width = 1
   let height = 1
@@ -255,7 +359,10 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
   const pullBack = new THREE.Vector3()
   const closest = new THREE.Vector3()
   const dnaCentre = new THREE.Vector3()
-  const phase = { dna: 1, ant: 0, world: 0, earth: 0 }
+  // soil: 1 = the lamp-lit ground disc and the falling leaves are there, 0 = gone. The last zoom-out fades them
+  // so the ant is left standing on the planet's north pole instead of on a flat plate.
+  const phase = { dna: 1, ant: 0, world: 0, earth: 0, forest: 0, soil: 1 }
+  let lastSoil = -1
 
   function curved(B, name, t) {
     const c = B.curve?.[name]
@@ -281,11 +388,14 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
     phase.dna = lerp(A.dna, B.dna, curved(B, 'dna', t))
     phase.ant = lerp(A.ant, B.ant, curved(B, 'ant', t))
     phase.earth = lerp(A.earth ?? 0, B.earth ?? 0, curved(B, 'earth', t))
+    phase.forest = lerp(A.forest ?? 0, B.forest ?? 0, curved(B, 'forest', t))
     phase.world = lerp(A.world, B.world, curved(B, 'world', t))
+    phase.soil = lerp(A.soil ?? 1, B.soil ?? 1, curved(B, 'soil', t))
 
     // A "cut" hides the long flight between the two worlds: the screen is black, so jump.
     const pose = B.cut ? (t < 0.5 ? A : B) : null
     const tp = pose ? 0 : smoother(t)
+
     const P = pose ?? A
     const Q = pose ?? B
     keyPos.set(lerp(P.pos[0], Q.pos[0], tp), lerp(P.pos[1], Q.pos[1], tp), lerp(P.pos[2], Q.pos[2], tp))
@@ -313,6 +423,14 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
     const sway = 0.16 * Math.min(1, pullBack.length() * 0.2 + 0.35)
     keyPos.addScaledVector(right, pointer.sx * sway).addScaledVector(up, -pointer.sy * sway * 0.7)
 
+    // The zoom-out leaves the ant thousands of units behind. Past 100 units from the ant, push the near plane out
+    // (and the far plane past the planet's far side) so depth precision survives. Closer in, nothing changes.
+    const dAnt = Math.hypot(keyPos.x - ANT_ORIGIN[0], keyPos.y - ANT_ORIGIN[1], keyPos.z - ANT_ORIGIN[2])
+    camera.near = Math.max(0.03, (dAnt - 100) * 0.004)
+    // The forest is ~290 units across; once the camera is far above it, extend the far plane like the planet does.
+    const needFar = phase.earth > 0.003 || (phase.forest > 0.003 && dAnt > 350)
+    camera.far = needFar ? (dAnt + 2 * EARTH_RADIUS) * 1.2 + 700 : 700
+
     camera.position.copy(keyPos)
     camera.up.set(0, 1, 0)
     camera.lookAt(keyLook)
@@ -325,7 +443,8 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
     const w = phase.world
     scene.background.copy(BG_DNA).lerp(BG_ANT, w)
     scene.fog.color.copy(scene.background)
-    scene.fog.density = lerp(0.034, 0.016, w) * (1 - 0.97 * phase.earth)
+    // Thinner fog over the forest, otherwise the far trees vanish into the dark before the camera can see the wood.
+    scene.fog.density = lerp(0.034, 0.016, w) * (1 - phase.earth) * (1 - 0.92 * phase.forest)
     bloom.strength = lerp(0.6, 0.32, w)
     bloom.threshold = lerp(BLOOM_THRESHOLD_DNA, 0.62, w)
 
@@ -354,6 +473,19 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
         m.envMapIntensity = L * m.userData.envBase
         if (m.userData.emissiveBase !== undefined) m.emissiveIntensity = L * m.userData.emissiveBase
       })
+
+      // The ground disc and the leaves dissolve during the final zoom-out, uncovering the planet beneath the ant.
+      const s = phase.soil
+      const soilOn = s > 0.003
+      ant.ground.visible = soilOn
+      ant.leafGroups.forEach((g) => (g.visible = soilOn))
+      if (soilOn && s !== lastSoil) {
+        ant.soilMats.forEach((m) => {
+          m.transparent = s < 0.999
+          m.opacity = s
+        })
+      }
+      lastSoil = s
     }
   }
 
@@ -417,10 +549,24 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
       earthInfo.sun.intensity = 1.5 * phase.earth
       earth?.update(dt, phase.earth)
     }
+    if (forestLights.length) {
+      forestLights[0].intensity = FOREST_MOON_INTENSITY * phase.forest
+      forestLights[1].intensity = FOREST_HEMI_INTENSITY * phase.forest
+    }
+    forest?.update(phase.forest)
+    forestClouds?.update(phase.forest, time)
     if (ant) ant.group.visible = phase.ant > 0.003
 
     updateCamera(dt)
     applyPhase(time)
+
+    // Stars ride with the camera (centred on it, just inside the far plane) and fade in with the planet.
+    stars.visible = phase.earth > 0.003
+    if (stars.visible) {
+      stars.position.copy(camera.position)
+      stars.scale.setScalar(camera.far * 0.85)
+      stars.material.opacity = 0.9 * smoother(phase.earth)
+    }
 
     if (ant && ant.group.visible) {
       ant.rig.quaternion.copy(dragQuat) // dragging turns the ant too
@@ -438,7 +584,7 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
   const load = (url) => new Promise((res, rej) => loader.load(url, res, undefined, rej))
 
 
-  /** The Sketchfab planet (earth.glb): scaled to a 30-unit radius, parked at EARTH_ORIGIN, faded by `amount`. */
+  /** The Sketchfab planet (earth.glb): sized to EARTH_RADIUS, sitting at EARTH_ORIGIN, faded in and out by `amount`. */
   function buildEarth(gltf) {
     const model = gltf.scene
     const box = new THREE.Box3().setFromObject(model)
@@ -446,7 +592,9 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
     model.position.sub(box.getCenter(new THREE.Vector3()))
     const group = new THREE.Group()
     group.add(model)
-    group.scale.setScalar(60 / Math.max(size.x, size.y, size.z)) // radius 30
+    // The scale that makes the model exactly EARTH_RADIUS in radius.
+    const fit = (EARTH_RADIUS * 2) / Math.max(size.x, size.y, size.z)
+    group.scale.setScalar(fit)
     group.position.set(...EARTH_ORIGIN)
     group.rotation.set(0.35, 0, -0.2) // axial tilt; tweak if the poles face the camera
     group.visible = false
@@ -463,10 +611,14 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
     const mixer = gltf.animations.length ? new THREE.AnimationMixer(model) : null
     gltf.animations.forEach((c) => mixer.clipAction(c).play())
     scene.add(group)
+    const atmosphere = buildAtmosphere(new THREE.Vector3(90, 110, 130)) // same direction as the sun light set up in boot
+    scene.add(atmosphere)
     earth = {
       group,
       update(dt, d) {
         group.visible = d > 0.003
+        atmosphere.visible = group.visible
+        atmosphere.material.uniforms.uAmount.value = d
         if (!group.visible) return
         if (mixer) mixer.update(reduceMotion ? 0 : dt)
         else model.rotation.y += reduceMotion ? 0 : dt * 0.03
@@ -474,6 +626,226 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
           m.transparent = m._t || d < 0.999
           m.opacity = m._o * d
           if ('emissiveIntensity' in m) m.emissiveIntensity = m._e * d
+        })
+      },
+    }
+  }
+
+  /**
+   * forest.glb: about 1,480 separate meshes sharing three materials. They are baked into ONE mesh per material (three
+   * draw calls instead of 1,480), scaled by FOREST_SCALE and stood on the ant's origin so the ant is on the forest's road.
+   * It is faded in and out by `amount`, like the planet. Not drawn at all while amount is 0.
+   */
+  function buildForest(gltf) {
+    const model = gltf.scene
+    model.updateMatrixWorld(true)
+    const buckets = new Map() // material -> geometries, already in the file's world space
+    const centre = new THREE.Vector3()
+    model.traverse((o) => {
+      if (!o.isMesh) return
+      const g = o.geometry.clone()
+      g.applyMatrix4(o.matrixWorld)
+      g.computeBoundingBox()
+      g.boundingBox.getCenter(centre)
+      if (centre.x < FOREST_SOURCE.minX) {
+        g.dispose()
+        return
+      }
+      // Only position / normal / uv survive, so every geometry in a bucket has identical attributes and can merge.
+      Object.keys(g.attributes).forEach((n) => {
+        if (n !== 'position' && n !== 'normal' && n !== 'uv') g.deleteAttribute(n)
+      })
+      if (!g.attributes.normal) g.computeVertexNormals()
+      if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2))
+      const list = buckets.get(o.material) ?? []
+      list.push(g)
+      buckets.set(o.material, list)
+    })
+
+    const group = new THREE.Group()
+    const mats = new Set()
+    buckets.forEach((geoms, m) => {
+      const allIndexed = geoms.every((g) => g.index)
+      const parts = allIndexed ? geoms : geoms.map((g) => (g.index ? g.toNonIndexed() : g))
+      const merged = mergeGeometries(parts, false)
+      if (!merged) {
+        console.error('forest: could not merge a material bucket')
+        return
+      }
+      m.side = THREE.DoubleSide
+      m.metalness = 0
+      if (m.transparent) {
+        // The leaf cards use alpha blending in the file. Cut-outs sort and fade far better with 1,400 overlapping cards.
+        m.transparent = false
+        m.alphaTest = 0.4
+        m.depthWrite = true
+      }
+      if (m.map) {
+        m.map.anisotropy = 4
+        m.emissive = new THREE.Color(0xffffff)
+        m.emissiveMap = m.map
+        m.emissiveIntensity = FOREST_GLOW
+      }
+      m.needsUpdate = true
+      m._o = m.opacity
+      m._t = m.transparent
+      mats.add(m)
+      const mesh = new THREE.Mesh(merged, m)
+      mesh.frustumCulled = false // one mesh spans the whole wood
+      group.add(mesh)
+      ;[m.map, m.normalMap].forEach((tex) => tex && renderer.initTexture(tex)) // upload now, not on the first frame it is seen
+    })
+
+    group.scale.setScalar(FOREST_SCALE)
+    group.position.set(
+      ANT_ORIGIN[0] - FOREST_SOURCE.centre[0] * FOREST_SCALE,
+      ANT_ORIGIN[1] - FOREST_SOURCE.centre[1] * FOREST_SCALE - FOREST_SINK,
+      ANT_ORIGIN[2] - FOREST_SOURCE.centre[2] * FOREST_SCALE,
+    )
+    scene.add(group)
+    buildForestClouds(group)
+    // Compile its shaders while it is hidden from the story, so it does not hitch the first time it fades in.
+    group.visible = true
+    renderer.compile(scene, camera)
+    group.visible = false
+
+    let last = -1
+    forest = {
+      group,
+      mats,
+      update(d) {
+        group.visible = d > 0.003
+        if (!group.visible || d === last) return
+        last = d
+        mats.forEach((m) => {
+          m.transparent = m._t || d < 0.999
+          m.opacity = m._o * d
+        })
+      },
+    }
+  }
+
+  /**
+   * Soft cloud banks and a low mist around the edge of the wood, so the block never ends in a visible cut.
+   * Sprites with canvas-drawn puffs (no extra download), unlit and fogless so they stay a cool moonlit grey.
+   * Placed from the forest's real bounding box, so they follow the block however the file is scaled.
+   */
+  function buildForestClouds(forestGroup) {
+    forestGroup.updateMatrixWorld(true)
+    const box = new THREE.Box3().setFromObject(forestGroup)
+    const size = box.getSize(new THREE.Vector3())
+    const groundY = box.min.y
+    const treeH = Math.max(20, size.y)
+
+    // Seeded, so the clouds sit in the same places on every load.
+    let seed = 1337
+    const rand = () => {
+      seed = (seed + 0x6d2b79f5) | 0
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+
+    // A cluster of overlapping radial gradients. spread + radius stay inside the canvas so no puff has a clipped edge.
+    const makePuff = (blobs, spreadX, spreadY, rMin, rMax) => {
+      const s = 256
+      const c = document.createElement('canvas')
+      c.width = c.height = s
+      const g = c.getContext('2d')
+      for (let i = 0; i < blobs; i++) {
+        const x = s / 2 + (rand() - 0.5) * s * spreadX
+        const y = s / 2 + (rand() - 0.5) * s * spreadY
+        const r = s * (rMin + rand() * (rMax - rMin))
+        const grad = g.createRadialGradient(x, y, 0, x, y, r)
+        grad.addColorStop(0, 'rgba(255,255,255,0.5)')
+        grad.addColorStop(0.55, 'rgba(255,255,255,0.2)')
+        grad.addColorStop(1, 'rgba(255,255,255,0)')
+        g.fillStyle = grad
+        g.fillRect(0, 0, s, s)
+      }
+      const tex = new THREE.CanvasTexture(c)
+      tex.colorSpace = THREE.SRGBColorSpace
+      return tex
+    }
+    const makeMat = (tex, color, base) => {
+      const m = new THREE.SpriteMaterial({ map: tex, color, transparent: true, opacity: 0, depthWrite: false, fog: false })
+      m._base = base
+      return m
+    }
+    const cloudMats = [0, 1, 2].map(() => makeMat(makePuff(14, 0.44, 0.36, 0.14, 0.26), CLOUD_COLOR, CLOUD_OPACITY))
+    const mistMat = makeMat(makePuff(10, 0.6, 0.2, 0.1, 0.2), MIST_COLOR, MIST_OPACITY)
+    const mats = [...cloudMats, mistMat]
+
+    const root = new THREE.Group()
+    root.visible = false
+    const sprites = []
+    const perim = 2 * (size.x + size.z)
+
+    // Walks the rectangle's outline: a point on the edge, the outward normal, and the direction along the edge.
+    const onEdge = (s) => {
+      if (s < size.x) return { x: box.min.x + s, z: box.min.z, nx: 0, nz: -1, tx: 1, tz: 0 }
+      s -= size.x
+      if (s < size.z) return { x: box.max.x, z: box.min.z + s, nx: 1, nz: 0, tx: 0, tz: 1 }
+      s -= size.z
+      if (s < size.x) return { x: box.max.x - s, z: box.max.z, nx: 0, nz: 1, tx: -1, tz: 0 }
+      s -= size.x
+      return { x: box.min.x, z: box.max.z - s, nx: -1, nz: 0, tx: 0, tz: -1 }
+    }
+
+    const place = (mat, i, lift, w, h) => {
+      const e = onEdge(((i + rand() * 0.8) / CLOUD_COUNT) * perim)
+      const out = -CLOUD_DEPTH * 0.3 + rand() * CLOUD_DEPTH // mostly outside the wood, some tucked inside it
+      const sp = new THREE.Sprite(mat)
+      sp.scale.set(w, h, 1)
+      sp.renderOrder = 10 // always after the trees, even while the forest itself is fading
+      sp.userData = {
+        x: e.x + e.nx * out,
+        y: groundY + lift,
+        z: e.z + e.nz * out,
+        tx: e.tx,
+        tz: e.tz,
+        amp: 6 + rand() * 10,
+        bob: 1 + rand() * 2.5,
+        speed: 0.03 + rand() * 0.05,
+        phase: rand() * Math.PI * 2,
+      }
+      sp.position.set(sp.userData.x, sp.userData.y, sp.userData.z)
+      root.add(sp)
+      sprites.push(sp)
+    }
+
+    for (let i = 0; i < CLOUD_COUNT; i++) {
+      // cloud banks reach from mid-trunk to just above the crowns
+      const w = CLOUD_SIZE * (0.8 + rand() * 0.7)
+      place(cloudMats[i % cloudMats.length], i, treeH * (0.35 + rand() * 0.7), w, w * (0.55 + rand() * 0.2))
+    }
+    for (let i = 0; i < CLOUD_COUNT; i++) {
+      // low mist hugging the ground, wide and flat
+      const w = CLOUD_SIZE * (1 + rand() * 0.6)
+      place(mistMat, i, w * 0.12 + rand() * 10, w, w * 0.28)
+    }
+    scene.add(root)
+
+    let lastD = -1
+    forestClouds = {
+      update(d, t) {
+        root.visible = d > 0.003
+        if (!root.visible) return
+        if (d !== lastD) {
+          lastD = d
+          mats.forEach((m) => (m.opacity = m._base * d))
+        }
+        if (reduceMotion) return
+        for (const sp of sprites) {
+          const u = sp.userData
+          const o = Math.sin(t * u.speed + u.phase) * u.amp // slow drift along the edge
+          sp.position.set(u.x + u.tx * o, u.y + Math.sin(t * u.speed * 0.7 + u.phase) * u.bob, u.z + u.tz * o)
+        }
+      },
+      dispose() {
+        mats.forEach((m) => {
+          m.map?.dispose()
+          m.dispose()
         })
       },
     }
@@ -545,6 +917,8 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
     diffuse.flipY = false
     diffuse.anisotropy = 4
     const leafMixers = []
+    const leafGroups = [] // hidden together with the ground when the last zoom-out uncovers the planet
+    const leafMats = []
     const placements = [
       { x: 0, z: 0, ry: 0, t: 0 },
       { x: 2.4, z: -2.6, ry: 1.9, t: 3.3 },
@@ -570,8 +944,10 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
         m.needsUpdate = true
         o.material = m
         track(m, 0.7, 0.18)
+        leafMats.push(m)
       })
       group.add(leaves)
+      leafGroups.push(leaves)
       const mixer = new THREE.AnimationMixer(leaves)
       const a = mixer.clipAction(leafGltf.animations[0])
       a.time = p.t
@@ -579,7 +955,7 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
       leafMixers.push(mixer)
     })
 
-    ant = { group, rig, antMixer, leafMixers, materials, spot, hemi }
+    ant = { group, rig, antMixer, leafMixers, materials, spot, hemi, ground, leafGroups, soilMats: [ground.material, ...leafMats] }
     renderer.compile(scene, camera)
   }
 
@@ -605,6 +981,15 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
         scene.add(dnaKey, dnaRim)
         dnaLights = [dnaKey, dnaRim]
 
+        // Forest lighting: a cool moon raking across the road plus a dim sky/ground fill. Both start at 0 and are
+        // driven by phase.forest, so the forest is the only thing they ever light up noticeably.
+        const moon = new THREE.DirectionalLight(0x9db8ff, 0)
+        moon.position.set(-90, ANT_ORIGIN[1] + 160, 110)
+        moon.target.position.set(...ANT_ORIGIN)
+        const forestHemi = new THREE.HemisphereLight(0x8fb0e0, 0x1a2a1c, 0)
+        scene.add(moon, moon.target, forestHemi)
+        forestLights = [moon, forestHemi]
+
         // Drifting motes around the helix (built in structures.js, not previously added to the scene).
         dust = world.dust
         dust.material.opacity = DNA_DUST_OPACITY
@@ -624,6 +1009,10 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
         Promise.all([load(modelUrls.ant), load(modelUrls.leaves)])
           .then(([a, l]) => !disposed && buildAnt(a, l))
           .catch((err) => console.error('ant / leaves failed to load', err))
+          // The 28 MB forest waits until the ant and leaves are in, so it never competes with them for bandwidth.
+          .then(() => (disposed ? null : load(modelUrls.forest)))
+          .then((g) => g && !disposed && buildForest(g))
+          .catch((err) => console.error('forest failed to load', err))
       } catch (err) {
         console.error(err)
         onError?.(err)
@@ -675,8 +1064,12 @@ export function createDnaScene({ canvas, modelUrls, getStops, onLoadProgress, on
       })
       dust?.geometry.dispose()
       dust?.material.dispose()
+      stars.geometry.dispose()
+      stars.material.dispose()
       dnaInfo?.helixMaterial.dispose()
       ant?.materials.forEach((m) => m.dispose())
+      forest?.mats.forEach((m) => m.dispose())
+      forestClouds?.dispose()
       envTexture.dispose()
       pmrem.dispose()
       composer.dispose()
